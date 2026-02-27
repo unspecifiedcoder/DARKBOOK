@@ -1,0 +1,17 @@
+# Prover inputs — populated at proof generation time
+# This file is a template; actual values are injected by the prover service
+
+# Private inputs
+price = ""
+amount = ""
+side = ""
+balance = ""
+salt = ""
+balance_leaf_index = ""
+balance_merkle_path = []
+
+# Public inputs
+commitment = ""
+balance_root = ""
+nullifier = ""
+token_pair_id = ""
