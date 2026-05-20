@@ -1,0 +1,8 @@
+[package]
+name = "darkbook_balance_update"
+type = "bin"
+authors = ["DarkBook"]
+compiler_version = ">=0.30.0"
+
+[dependencies]
+darkbook_lib = { path = "../lib" }
