@@ -57,12 +57,14 @@ Three integration gaps stand between this prototype and "we can verify a real pr
 | Solidity engine + vault | **Real.** 42 Foundry tests, gas-benchmarked. | — |
 | Matcher orderbook | **Real.** 17 Vitest tests, price-time priority correct. | — |
 | Frontend UI | **Real.** Order entry, vault flow, opaque book viz. | — |
-| `contracts/src/verifiers/UltraPlonkVerifier.sol` | **Stub.** `return true;` at line 103. | `nargo codegen-verifier` × 3, drop into `contracts/src/verifiers/`, rewire `DarkBookEngine.sol` public-input packing. |
-| `matcher/src/prover.ts` | **Stub.** Returns 32 bytes of `0x01`. | `@noir-lang/noir_js` + the compiled `circuits/target/*.json` artifacts. |
+| On-chain UltraHonk verifiers (3) | **Real.** Generated via `bb write_solidity_verifier` from each Noir circuit. ~2460 lines of Solidity each, all three verify real proofs on Monad. | — |
+| Engine ↔ verifier wiring | **Real.** `DarkBookEngine.sol` packs 7 / 6 / 5 public inputs per circuit, in Noir declaration order. | — |
+| Foundry proof fixtures | **Real.** Two proof fixtures committed (`order_commitment` 8384B, `match_proof` 8000B), regenerable via `circuits/scripts/gen-fixtures.sh`. Both verify on-chain in test (gas ~2.1–2.5M each). | — |
+| `matcher/src/prover.ts` | **Real.** Generates UltraHonk proofs by shelling out to `nargo execute` + `bb prove`. Same path the fixture pipeline uses. | — |
 | `frontend/lib/noir/prover.ts` | **Stub.** `setTimeout(2000)`. | `@aztec/bb.js` in a worker thread + Next.js wasm bundling fix. |
 | Matcher-side privacy | **Not v1.** Operator sees plaintext after ECDH decrypt. | MPC or threshold encryption for v2. |
 
-If you're a hackathon judge or a contributor evaluating this repo, the highest-leverage hour you can spend on it is `nargo codegen-verifier` plus the engine rewire — the circuits exist, the contracts exist, the wire is unplugged.
+If you're a hackathon judge or a contributor evaluating this repo, the on-chain ZK security model is now real: the verifier rejects garbage bytes (`test_real_verifier_rejects_garbage`), accepts real UltraHonk proofs (`test_submitOrder_accepts_real_proof`), and rejects mutated public inputs (3 negative tests on the match proof). The remaining work is closing the user-side proving loop in the browser.
 
 ---
 
@@ -221,14 +223,14 @@ Run: `cd matcher && npx vitest run`. Price/time sort invariants, crossing, midpo
 
 ## Roadmap
 
-Ordered by leverage, not effort. The first item is what unlocks "this actually verifies a proof on-chain".
+Items 1 and 2 from the prior README have landed (real on-chain verifier and a real matcher-side prover). The remaining work, ordered by leverage:
 
-1. **Replace stub verifier.** `nargo codegen-verifier` per binary; rewire `DarkBookEngine.sol` public-input packing; update `E2E.t.sol` to use real proofs; redeploy on Monad.
-2. **Wire client-side and matcher provers.** `@aztec/bb.js` in a worker for the browser (`order_commitment`); `@noir-lang/noir_js` in Node for the matcher (`match_proof` + `balance_update`).
+1. **Client-side proving in the browser.** `@aztec/bb.js` in a worker thread + Next.js wasm bundling. The matcher already shells out to `nargo` + `bb` and the same approach works server-side; the browser path needs the wasm route.
+2. **`balance_update` proof + restored E2E settleMatch test.** The circuit and matcher API are both ready; the missing piece is a canonical 4-leaf witness fixture and the threading of per-trader Merkle data through `index.ts → settler.ts`.
 3. **Commit-reveal channel.** Trader posts encrypted reveal to a bulletin board; matcher only decrypts when both sides are settled-ready. Eliminates the front-running window.
 4. **Threshold-encrypted matcher.** N operators jointly decrypt; no single operator sees plaintext. Renegade-style without full MPC complexity.
 5. **Partial-fill state in the engine.** Circuit already supports it; engine doesn't yet update `remainingAmount`.
-6. **Withdrawal proofs.** `Vault.withdraw` has no test coverage today. Bind to an explicit user-signed nullifier per withdrawal.
+6. **Withdrawal proofs.** `Vault.withdraw` now reverts with `NotYetImplemented`; the dedicated withdrawal circuit + verifier is the next addition.
 7. **Per-order owner blinding.** Today the same `owner_id` recurs across a trader's orders, allowing linkage. v2: `owner_id = H(master_secret, salt)`.
 8. **Audit.** After steps 1–4.
 
