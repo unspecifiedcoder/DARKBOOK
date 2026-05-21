@@ -122,6 +122,44 @@ fn main(
 // inputs match. Negative tests use `should_fail_with` to confirm that
 // tampering with any input causes the constraint system to reject.
 
+// Canonical fixture witness used by the off-chain proof-generation script
+// (`circuits/scripts/gen-fixtures.sh`). Prints the public-input vector that
+// the on-chain `submitOrder` call must pass, in declaration order, so the
+// script can re-derive `Prover.toml` for `nargo execute`.
+#[test]
+fn print_fixture_values() {
+    let chain_id: Field = 31337;
+    let market_id: Field = 1;
+    let sender_secret: Field = 0xDEADBEEF;
+    let owner_id = derive_owner_id(sender_secret);
+    let price: Field = 100;
+    let amount: Field = 50;
+    let side: Field = 0;
+    let salt: Field = 0xABC123;
+    let expiry_block: Field = 100_000;
+    let quote_token: Field = 22;
+    let balance: Field = 10_000;
+    let leaf_nonce: Field = 1;
+    let leaf_index: Field = 0;
+    let path: [Field; TREE_DEPTH] = [0; TREE_DEPTH];
+
+    let commitment = hash_order_commitment(
+        chain_id, market_id, owner_id, price, amount, side, expiry_block, salt,
+    );
+    let nullifier = hash_nullifier(chain_id, market_id, sender_secret, salt);
+    let leaf = hash_balance_leaf(owner_id, quote_token, balance, leaf_nonce);
+    let balance_root = darkbook_lib::merkle::compute_root(leaf, leaf_index, path);
+
+    // Tagged "FIXTURE:" lines are picked up by `gen-fixtures.sh`.
+    println(f"FIXTURE:commitment={commitment}");
+    println(f"FIXTURE:nullifier={nullifier}");
+    println(f"FIXTURE:balance_root={balance_root}");
+    println(f"FIXTURE:owner_id={owner_id}");
+    println(f"FIXTURE:chain_id={chain_id}");
+    println(f"FIXTURE:market_id={market_id}");
+    println(f"FIXTURE:expiry_block={expiry_block}");
+}
+
 #[test]
 fn test_valid_buy_order() {
     let chain_id: Field = 10143;
