@@ -44,3 +44,6 @@ npm-debug.log*
 
 # Fixture generation logs (binaries are tracked, logs are not)
 contracts/test/fixtures/**/*.log
+
+# Matcher copies these from circuits/target/ via postinstall
+matcher/circuits/
