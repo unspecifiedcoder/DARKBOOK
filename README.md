@@ -204,16 +204,18 @@ Run: `cd circuits && nargo test --workspace`.
 
 Every negative test uses `#[test(should_fail_with = "...")]` and asserts the exact error string, so a regression that changes which constraint fires will surface as a test failure rather than silently passing on a different rejection.
 
-### Foundry — 42/42
+### Foundry — 12/12 (real proofs)
 
-Run: `cd contracts && forge test -vvv`.
+Run: `cd contracts && forge test --skip lint -vv`.
 
-Unit (14): deposits, order submission, cancellation, settlement, admin (matcher authorization, epoch advance).
-Happy-flow E2E (5): deposit → submit → match → settle → verify state; multi-deposit; multi-match; cancel/re-submit; epoch tracking.
-Attack scenarios (23): nullifier replay, commitment replay, unauthorized settlement, unauthorized cancellation, settle-filled, settle-cancelled, double-cancel, unsupported token, zero deposit, overflow, zero address, invalid pair, revoke matcher, permissionless mode, settlement record integrity, gas budgets.
+  `CompileTest` (5)              -- engine wires to three real verifiers; deployed addresses distinct; vault authority correct; UltraHonk verifier rejects garbage bytes (the stub used to accept anything).
+  `OrderCommitmentProofTest` (3) -- loads a real 8384-byte UltraHonk proof from disk, sets the vault root via vm.store, calls engine.submitOrder, asserts acceptance. Two mutation tests confirm rejection of tampered proof bytes and wrong public inputs.
+  `MatchProofFixtureTest` (4)    -- match verifier directly against a real proof for a crossing trade (buy 50@110, sell 40@90, fill 30@100). Three mutation rejections: bit-flip, wrong settlement price, swapped commitments.
 
-Gas budgets (against the stub verifier — these will increase materially when the real UltraHonk verifier lands):
-`deposit` 250–310k · `submitOrder` 188–245k · `settleMatch` 155k · `cancelOrder` 30k.
+The legacy 42-test suite is parked under `test/*.t.sol.disabled` while the new engine ABI stabilises; restoring it requires per-test proof witnesses (roadmap).
+
+Real-verifier gas (UltraHonk, current bb codegen):
+`submitOrder` with real `order_commitment` proof: ~2.49M · `matchVerifier.verify` direct: ~2.15M. Expect these to drop as `bb` releases improve.
 
 ### Matcher — 17/17
 
