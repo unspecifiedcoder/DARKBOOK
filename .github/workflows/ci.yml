@@ -80,9 +80,14 @@ jobs:
           cache: npm
           cache-dependency-path: matcher/package-lock.json
 
-      - name: npm ci
+      # Use `npm install` rather than `npm ci` here as a workaround for
+      # npm/cli#4828 -- rollup's platform-specific native binary
+      # (@rollup/rollup-linux-x64-gnu) is an optional dep that ci skips
+      # when the lockfile was generated on a different os/arch combo.
+      # `install` re-resolves and picks up the right binary for the runner.
+      - name: npm install
         working-directory: matcher
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       - name: tsc
         working-directory: matcher
