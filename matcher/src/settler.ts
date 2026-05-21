@@ -32,8 +32,10 @@ const ENGINE_ABI = [
     inputs: [
       { name: "commitA", type: "bytes32" },
       { name: "commitB", type: "bytes32" },
-      { name: "fillAmount", type: "uint256" },
+      { name: "fillReceipt", type: "bytes32" },
       { name: "settlementPrice", type: "uint256" },
+      { name: "midRoot", type: "bytes32" },
+      { name: "newRoot", type: "bytes32" },
       { name: "matchProof", type: "bytes" },
       { name: "balanceProof", type: "bytes" },
     ],
@@ -170,17 +172,23 @@ export class SettlerService {
     match: Match,
     currentRoot: `0x${string}`
   ): Promise<SettlementResult> {
-    // Generate proofs
-    const matchProof = await this.prover.generateMatchProof(match);
-    const newRoot =
-      `0x${Buffer.from("new_root_placeholder").toString("hex").padStart(64, "0")}` as `0x${string}`;
-    const balanceProof = await this.prover.generateBalanceUpdateProof(
-      match,
-      currentRoot,
-      newRoot
+    // The new prover API needs the per-trader owner_ids, salts, and Merkle
+    // path data that aren't carried in a `Match` object today. Threading
+    // that through the encrypted-order envelope is a small refactor of
+    // index.ts and is the next adjacent piece of work. For now this throws
+    // so misconfiguration is loud; the prover itself is exercised directly
+    // by the matcher's integration tests.
+    void match;
+    void currentRoot;
+    throw new Error(
+      "settler.settleMatch: pending integration with new prover API; " +
+      "see roadmap. Use prover.ts directly until index.ts threads the " +
+      "per-order private witness data through to here.",
     );
 
-    // Submit settlement transaction
+    // Unreachable until the rewire above lands; left as the canonical
+    // engine call site so the new ABI is documented in one place.
+    // eslint-disable-next-line @typescript-eslint/no-unreachable-code
     const txHash = await this.walletClient.writeContract({
       address: this.config.engineAddress,
       abi: ENGINE_ABI,
@@ -188,10 +196,12 @@ export class SettlerService {
       args: [
         match.buyOrder.order.commitment as `0x${string}`,
         match.sellOrder.order.commitment as `0x${string}`,
-        match.fillAmount,
+        ("0x" + "00".repeat(32)) as `0x${string}`, // fillReceipt (TODO from match proof)
         match.settlementPrice,
-        `0x${Buffer.from(matchProof.proof).toString("hex")}` as `0x${string}`,
-        `0x${Buffer.from(balanceProof.proof).toString("hex")}` as `0x${string}`,
+        ("0x" + "00".repeat(32)) as `0x${string}`, // midRoot
+        ("0x" + "00".repeat(32)) as `0x${string}`, // newRoot
+        "0x" as `0x${string}`,
+        "0x" as `0x${string}`,
       ],
     });
 
