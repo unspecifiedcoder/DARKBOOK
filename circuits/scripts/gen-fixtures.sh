@@ -31,6 +31,7 @@ fi
 # (Nargo package, fixture sub-directory)
 FIXTURES=(
     "darkbook_order_commitment order_commitment"
+    "darkbook_match_proof      match_proof"
 )
 
 mkdir -p "$FIXTURES_DIR"

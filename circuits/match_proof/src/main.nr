@@ -134,6 +134,50 @@ fn main(
     assert(receipt == fill_receipt, "fill_receipt mismatch");
 }
 
+// ---------- Fixture printer ----------
+// Prints the canonical match_proof public-input vector used by
+// `circuits/scripts/gen-fixtures.sh` to populate Prover.toml. Mirrors
+// `print_fixture_values` in order_commitment.
+#[test]
+fn print_fixture_values() {
+    let chain_id: Field = 31337;
+    let market_id: Field = 1;
+
+    let owner_id_a: Field = 100;
+    let price_a: Field = 110;
+    let amount_a: Field = 50;
+    let side_a: Field = 0; // buy
+    let expiry_block_a: Field = 100_000;
+    let salt_a: Field = 1;
+
+    let owner_id_b: Field = 200;
+    let price_b: Field = 90;
+    let amount_b: Field = 40;
+    let side_b: Field = 1; // sell
+    let expiry_block_b: Field = 100_000;
+    let salt_b: Field = 2;
+
+    let fill_amount: Field = 30;
+    let settlement_price: Field = 100;
+    let match_nonce: Field = 999;
+
+    let commitment_a = hash_order_commitment(
+        chain_id, market_id, owner_id_a, price_a, amount_a, side_a, expiry_block_a, salt_a,
+    );
+    let commitment_b = hash_order_commitment(
+        chain_id, market_id, owner_id_b, price_b, amount_b, side_b, expiry_block_b, salt_b,
+    );
+    let mid = hash_match_id(commitment_a, commitment_b, fill_amount, settlement_price, match_nonce);
+    let receipt = hash_fill_receipt(mid, fill_amount, settlement_price);
+
+    println(f"FIXTURE:commitment_a={commitment_a}");
+    println(f"FIXTURE:commitment_b={commitment_b}");
+    println(f"FIXTURE:fill_receipt={receipt}");
+    println(f"FIXTURE:settlement_price={settlement_price}");
+    println(f"FIXTURE:market_id={market_id}");
+    println(f"FIXTURE:chain_id={chain_id}");
+}
+
 // ---------- Tests ----------
 
 // Helper to build a valid pair of orders + the matching public inputs.

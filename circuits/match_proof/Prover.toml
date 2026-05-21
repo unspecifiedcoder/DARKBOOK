@@ -1,20 +1,30 @@
-amount_a = ""
-amount_b = ""
-chain_id = ""
-commitment_a = ""
-commitment_b = ""
-expiry_block_a = ""
-expiry_block_b = ""
-fill_amount = ""
-fill_receipt = ""
-market_id = ""
-match_nonce = ""
-owner_id_a = ""
-owner_id_b = ""
-price_a = ""
-price_b = ""
-salt_a = ""
-salt_b = ""
-settlement_price = ""
-side_a = ""
-side_b = ""
+# Canonical fixture witness for the match_proof circuit.
+# Synced with `print_fixture_values` in src/main.nr.
+
+# ----- Order A (buyer) -----
+owner_id_a = "100"
+price_a = "110"
+amount_a = "50"
+side_a = "0"
+expiry_block_a = "100000"
+salt_a = "1"
+
+# ----- Order B (seller) -----
+owner_id_b = "200"
+price_b = "90"
+amount_b = "40"
+side_b = "1"
+expiry_block_b = "100000"
+salt_b = "2"
+
+# ----- Match parameters -----
+fill_amount = "30"
+match_nonce = "999"
+
+# ----- Public inputs -----
+commitment_a     = "0x153657ffb2ddce11ef88f4d7500e6961bdb6afe935b54062fb94175cfa82dc73"
+commitment_b     = "0x204aa3af7ab7b8d868f8db24bb0454458a5197f6036e6c0dac03ec36f0fcd5f2"
+fill_receipt     = "0x275199da460ce433549a6fbe4029dec282c10d69c6664cf681280f421556a621"
+settlement_price = "100"
+market_id        = "1"
+chain_id         = "31337"
