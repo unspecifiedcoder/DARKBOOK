@@ -67,6 +67,15 @@ for entry in "${CIRCUITS[@]}"; do
         -e "s/HonkVerificationKey\\./${library_name}./g" \
         "$VERIFIERS_DIR/$sol"
 
+    # bb emits assembly blocks without the memory-safe annotation, which
+    # forces solc into a Yul stack-too-deep when via_ir + optimizer are on.
+    # Annotate them; the generated code is in fact memory-safe (no out-of-
+    # bounds memory writes), it just isn't marked.
+    sed -i \
+        -e 's/        assembly {/        assembly ("memory-safe") {/g' \
+        -e 's/    assembly {/    assembly ("memory-safe") {/g' \
+        "$VERIFIERS_DIR/$sol"
+
     lines=$(wc -l < "$VERIFIERS_DIR/$sol")
     pub_inputs=$(grep -E "NUMBER_OF_PUBLIC_INPUTS = " "$VERIFIERS_DIR/$sol" | head -1 | sed 's/.*= //; s/;//')
     echo "    lines=$lines  public_inputs_size=$pub_inputs"
