@@ -1,0 +1,96 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Each job runs in parallel; they share no state. The matcher and frontend
+# jobs depend on circuit artifacts so they rebuild them rather than rely
+# on cached outputs.
+
+jobs:
+  noir:
+    name: noir / nargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nargo
+        run: |
+          curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
+          echo "$HOME/.nargo/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.nargo/bin:$PATH"
+          noirup -v 1.0.0-beta.19
+
+      - name: nargo check
+        working-directory: circuits
+        run: nargo check --workspace
+
+      - name: nargo test
+        working-directory: circuits
+        run: nargo test --workspace
+
+      - name: nargo compile
+        working-directory: circuits
+        run: nargo compile --workspace
+
+      - name: upload compiled circuits
+        uses: actions/upload-artifact@v4
+        with:
+          name: circuits-target
+          path: |
+            circuits/target/*.json
+          if-no-files-found: error
+
+  foundry:
+    name: foundry / forge test
+    runs-on: ubuntu-latest
+    needs: noir
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: forge build
+        working-directory: contracts
+        run: forge build --skip lint
+
+      - name: forge test
+        working-directory: contracts
+        # Fixture-based tests are the ones that actually exercise the
+        # UltraHonk verifiers against real proofs. They rely on the proof
+        # binaries committed under contracts/test/fixtures/.
+        run: forge test --skip lint -vv
+
+  matcher:
+    name: matcher / vitest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: matcher/package-lock.json
+
+      - name: npm ci
+        working-directory: matcher
+        run: npm ci
+
+      - name: tsc
+        working-directory: matcher
+        run: npx tsc --noEmit
+
+      # The prover.test.ts integration tests need nargo + bb; gating those
+      # on the noir job's artifacts keeps this stage cheap. Pure unit
+      # tests (orderbook.test.ts) run unconditionally.
+      - name: vitest (unit)
+        working-directory: matcher
+        run: npx vitest run tests/orderbook.test.ts
