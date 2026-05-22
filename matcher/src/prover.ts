@@ -18,23 +18,63 @@
 //   pure-JS switch is a search-and-replace away.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { CircuitName } from "./circuits.js";
-import { artifactsDir } from "./circuits.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..");
 const CIRCUITS_DIR = resolve(REPO_ROOT, "circuits");
+
+// Resolve the `bb` and `nargo` binaries to absolute paths.
+//
+// Critical: `@aztec/bb.js` ships its own `bb` binary and exposes it as a
+// package bin, so under `npm`/`npx` the node_modules/.bin shim shadows the
+// system `bb` on PATH. That bundled binary is built against a newer glibc
+// and fails to run on many hosts. We therefore resolve `bb` explicitly,
+// preferring an env override, then the conventional system location,
+// before ever falling back to a bare PATH lookup.
+export function resolveBb(): string {
+    const candidates = [
+        process.env.DARKBOOK_BB_PATH,
+        "/usr/local/bin/bb",
+        `${process.env.HOME ?? ""}/.bb/bb`,
+    ].filter((p): p is string => !!p);
+    for (const c of candidates) {
+        if (existsSync(c)) return c;
+    }
+    return "bb"; // last resort: bare PATH lookup
+}
+
+export function resolveNargo(): string {
+    const candidates = [
+        process.env.DARKBOOK_NARGO_PATH,
+        "/usr/local/bin/nargo",
+        `${process.env.HOME ?? ""}/.nargo/bin/nargo`,
+    ].filter((p): p is string => !!p);
+    for (const c of candidates) {
+        if (existsSync(c)) return c;
+    }
+    return "nargo";
+}
+
+const BB_BIN = resolveBb();
+const NARGO_BIN = resolveNargo();
 
 export interface ProofBundle {
     /** UltraHonk proof bytes, ready to pass as the `proof` arg to the engine. */
     proof: Uint8Array;
     /** Public inputs in field order, each as a 0x-prefixed 32-byte hex string. */
     publicInputs: `0x${string}`[];
+    /**
+     * The exact `public_inputs` file `bb prove` emitted (concatenated
+     * 32-byte fields). Pass this verbatim to `bb verify -i` -- it is the
+     * canonical serialization and avoids byte-mismatch from re-encoding.
+     */
+    publicInputsRaw: Uint8Array;
     /** Total proof generation time in milliseconds. */
     elapsedMs: number;
 }
@@ -91,25 +131,73 @@ export interface MatchProofInputs {
     chainId: bigint;
 }
 
+/** A trader's four-leaf state for `darkbook_balance_update`. */
+export interface BalanceTraderInputs {
+    ownerId: `0x${string}`;
+    oldBase: bigint;
+    oldQuote: bigint;
+    newLeafNonceBase: bigint;
+    newLeafNonceQuote: bigint;
+    oldLeafNonceBase: bigint;
+    oldLeafNonceQuote: bigint;
+    leafIndexBase: bigint;
+    leafIndexQuote: bigint;
+    pathBaseInOld: bigint[];   // length 20
+    pathQuoteInMid: bigint[];  // length 20
+}
+
+/** Inputs for `darkbook_balance_update`. */
+export interface BalanceUpdateInputs {
+    a: BalanceTraderInputs;
+    b: BalanceTraderInputs;
+    // private market/match context
+    sideA: 0 | 1;
+    baseToken: bigint;
+    quoteToken: bigint;
+    commitmentA: `0x${string}`;
+    commitmentB: `0x${string}`;
+    fillAmount: bigint;
+    matchNonce: bigint;
+    // public
+    oldRoot: `0x${string}`;
+    midRoot: `0x${string}`;
+    newRoot: `0x${string}`;
+    fillReceipt: `0x${string}`;
+    settlementPrice: bigint;
+}
+
 export class ProverService {
     private isInitialized = false;
 
     async initialize(): Promise<void> {
         if (this.isInitialized) return;
         // Sanity-check artifact presence so we fail fast on misconfiguration.
-        const dir = artifactsDir();
+        // The subprocess prover consumes ACIR + VK directly from the
+        // workspace's `circuits/target/` (that's where `nargo compile` and
+        // `codegen-verifiers.sh` write them), so we validate THAT path --
+        // not the matcher-local `circuits/` copy, which is reserved for a
+        // future pure-JS prover.
+        const targetDir = join(CIRCUITS_DIR, "target");
         const required: CircuitName[] = [
             "darkbook_order_commitment",
             "darkbook_match_proof",
             "darkbook_balance_update",
         ];
         for (const name of required) {
-            const acir = join(dir, `${name}.json`);
-            const vk = join(dir, "vk", name, "vk");
-            if (!this.fileExists(acir)) throw new Error(`missing acir: ${acir}`);
-            if (!this.fileExists(vk)) throw new Error(`missing vk: ${vk}`);
+            const acir = join(targetDir, `${name}.json`);
+            const vk = join(targetDir, "vk", name, "vk");
+            if (!existsSync(acir)) {
+                throw new Error(
+                    `missing acir: ${acir}. Run \`nargo compile --workspace\` in /circuits.`,
+                );
+            }
+            if (!existsSync(vk)) {
+                throw new Error(
+                    `missing vk: ${vk}. Run \`bash circuits/scripts/codegen-verifiers.sh\`.`,
+                );
+            }
         }
-        console.log(`[Prover] initialised; artifacts at ${dir}`);
+        console.log(`[Prover] initialised; artifacts at ${targetDir}`);
         this.isInitialized = true;
     }
 
@@ -140,6 +228,18 @@ export class ProverService {
         ]);
     }
 
+    async generateBalanceUpdateProof(inputs: BalanceUpdateInputs): Promise<ProofBundle> {
+        this.ensureReady();
+        const proverToml = this.renderBalanceUpdateToml(inputs);
+        return this.runProof("darkbook_balance_update", "balance_update", proverToml, [
+            inputs.oldRoot,
+            inputs.midRoot,
+            inputs.newRoot,
+            inputs.fillReceipt,
+            this.bigintToHex(inputs.settlementPrice),
+        ]);
+    }
+
     isReady(): boolean {
         return this.isInitialized;
     }
@@ -148,17 +248,6 @@ export class ProverService {
 
     private ensureReady() {
         if (!this.isInitialized) throw new Error("Prover not initialised; call initialize() first");
-    }
-
-    private fileExists(path: string): boolean {
-        try {
-            // eslint-disable-next-line @typescript-eslint/no-require-imports
-            const fs = require("node:fs");
-            fs.accessSync(path);
-            return true;
-        } catch {
-            return false;
-        }
     }
 
     private renderOrderCommitmentToml(i: OrderCommitmentInputs): string {
@@ -215,6 +304,52 @@ export class ProverService {
         ].join("\n");
     }
 
+    private renderBalanceUpdateToml(i: BalanceUpdateInputs): string {
+        const path = (arr: bigint[], label: string): string => {
+            if (arr.length !== 20) {
+                throw new Error(`${label} must have 20 elements, got ${arr.length}`);
+            }
+            return `[${arr.map((v) => `"${v.toString()}"`).join(", ")}]`;
+        };
+        return [
+            `a_owner_id = "${i.a.ownerId}"`,
+            `a_old_base = "${i.a.oldBase}"`,
+            `a_old_quote = "${i.a.oldQuote}"`,
+            `a_new_leaf_nonce_base = "${i.a.newLeafNonceBase}"`,
+            `a_new_leaf_nonce_quote = "${i.a.newLeafNonceQuote}"`,
+            `a_old_leaf_nonce_base = "${i.a.oldLeafNonceBase}"`,
+            `a_old_leaf_nonce_quote = "${i.a.oldLeafNonceQuote}"`,
+            `a_leaf_index_base = "${i.a.leafIndexBase}"`,
+            `a_leaf_index_quote = "${i.a.leafIndexQuote}"`,
+            `a_path_base_in_old = ${path(i.a.pathBaseInOld, "a.pathBaseInOld")}`,
+            `a_path_quote_in_mid = ${path(i.a.pathQuoteInMid, "a.pathQuoteInMid")}`,
+            `b_owner_id = "${i.b.ownerId}"`,
+            `b_old_base = "${i.b.oldBase}"`,
+            `b_old_quote = "${i.b.oldQuote}"`,
+            `b_new_leaf_nonce_base = "${i.b.newLeafNonceBase}"`,
+            `b_new_leaf_nonce_quote = "${i.b.newLeafNonceQuote}"`,
+            `b_old_leaf_nonce_base = "${i.b.oldLeafNonceBase}"`,
+            `b_old_leaf_nonce_quote = "${i.b.oldLeafNonceQuote}"`,
+            `b_leaf_index_base = "${i.b.leafIndexBase}"`,
+            `b_leaf_index_quote = "${i.b.leafIndexQuote}"`,
+            `b_path_base_in_old = ${path(i.b.pathBaseInOld, "b.pathBaseInOld")}`,
+            `b_path_quote_in_mid = ${path(i.b.pathQuoteInMid, "b.pathQuoteInMid")}`,
+            `side_a = "${i.sideA}"`,
+            `base_token = "${i.baseToken}"`,
+            `quote_token = "${i.quoteToken}"`,
+            `commitment_a = "${i.commitmentA}"`,
+            `commitment_b = "${i.commitmentB}"`,
+            `fill_amount = "${i.fillAmount}"`,
+            `match_nonce = "${i.matchNonce}"`,
+            `old_root = "${i.oldRoot}"`,
+            `mid_root = "${i.midRoot}"`,
+            `new_root = "${i.newRoot}"`,
+            `fill_receipt = "${i.fillReceipt}"`,
+            `settlement_price = "${i.settlementPrice}"`,
+            "",
+        ].join("\n");
+    }
+
     private runProof(
         pkg: CircuitName,
         pkgShortDir: string,
@@ -234,7 +369,7 @@ export class ProverService {
         try {
             // nargo execute writes target/<pkg>.gz (witness)
             const execResult = spawnSync(
-                "nargo",
+                NARGO_BIN,
                 ["execute", "--package", pkg, "--prover-name", proverPath, "--silence-warnings"],
                 { cwd: CIRCUITS_DIR, encoding: "utf-8" },
             );
@@ -250,7 +385,7 @@ export class ProverService {
             const proveOut = join(tmp, "out");
 
             const proveResult = spawnSync(
-                "bb",
+                BB_BIN,
                 [
                     "prove",
                     "-b", acirPath,
@@ -268,9 +403,11 @@ export class ProverService {
             }
 
             const proofBytes = readFileSync(join(proveOut, "proof"));
+            const pubBytes = readFileSync(join(proveOut, "public_inputs"));
             return {
                 proof: new Uint8Array(proofBytes.buffer, proofBytes.byteOffset, proofBytes.byteLength),
                 publicInputs,
+                publicInputsRaw: new Uint8Array(pubBytes.buffer, pubBytes.byteOffset, pubBytes.byteLength),
                 elapsedMs: Date.now() - started,
             };
         } finally {
