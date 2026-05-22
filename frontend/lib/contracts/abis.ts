@@ -89,7 +89,9 @@ export const ENGINE_ABI = [
     inputs: [
       { name: "commitment", type: "bytes32" },
       { name: "nullifier", type: "bytes32" },
-      { name: "tokenPairId", type: "uint256" },
+      { name: "ownerId", type: "bytes32" },
+      { name: "marketId", type: "uint256" },
+      { name: "expiryBlock", type: "uint256" },
       { name: "proof", type: "bytes" },
     ],
     outputs: [],
@@ -98,10 +100,7 @@ export const ENGINE_ABI = [
     name: "cancelOrder",
     type: "function",
     stateMutability: "nonpayable",
-    inputs: [
-      { name: "commitment", type: "bytes32" },
-      { name: "cancellationProof", type: "bytes" },
-    ],
+    inputs: [{ name: "commitment", type: "bytes32" }],
     outputs: [],
   },
   {

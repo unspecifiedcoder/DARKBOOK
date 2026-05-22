@@ -1,206 +1,185 @@
 // ============================================================
-// Client-Side Noir.js WASM Prover Integration
+// Client-Side Order-Commitment Prover
 // ============================================================
-// Generates ZK proofs in the browser using Noir.js + @aztec/bb.js.
-// This handles the order commitment proof generation flow.
-//
-// Noir.js (@noir-lang/noir_js) handles circuit execution & witness generation.
-// Barretenberg (@aztec/bb.js) handles proof generation & verification.
+// Thin async wrapper around `proverWorker.ts`. The heavy UltraHonk
+// proving runs off the main thread; this module just marshals the
+// request, relays progress, and resolves with the proof.
+
+import type {
+    ProveStage,
+    WorkerOutbound,
+    ProveRequest,
+} from "./proverWorker";
+
+export type { ProveStage };
 
 export type ProverStatus = "idle" | "loading" | "ready" | "proving" | "error";
 
+/**
+ * Inputs for the `darkbook_order_commitment` circuit. Field names mirror
+ * the Noir circuit's parameters 1:1; every value is a decimal or 0x-hex
+ * string (Noir's input encoding). The caller derives the public values
+ * (commitment, nullifier, owner_id, ...) the same way the circuit does.
+ */
 export interface OrderProofInputs {
-  // Private inputs
-  price: string;
-  amount: string;
-  side: string;
-  balance: string;
-  salt: string;
-  senderSecret: string;
-  balanceLeafIndex: string;
-  balanceMerklePath: string[];
-
-  // Public inputs
-  commitment: string;
-  balanceRoot: string;
-  nullifier: string;
-  tokenPairId: string;
+    // private
+    price: string;
+    amount: string;
+    side: string;
+    salt: string;
+    senderSecret: string;
+    baseToken: string;
+    quoteToken: string;
+    balance: string;
+    balanceLeafNonce: string;
+    balanceLeafIndex: string;
+    balanceMerklePath: string[]; // length 20
+    // public
+    commitment: string;
+    nullifier: string;
+    balanceRoot: string;
+    ownerId: string;
+    chainId: string;
+    marketId: string;
+    expiryBlock: string;
 }
 
 export interface GeneratedProof {
-  proof: Uint8Array;
-  publicInputs: string[];
+    proof: Uint8Array;
+    publicInputs: string[];
 }
 
-/**
- * Client-side ZK prover using Noir.js + Aztec Barretenberg WASM.
- *
- * Production initialization flow:
- *   1. Fetch compiled circuit JSON from /circuits/darkbook_circuits.json
- *   2. Create Noir instance for witness generation
- *   3. Create UltraHonkBackend from @aztec/bb.js for proving
- *   4. Execute circuit to get witness, then generate proof
- *
- * Current state: placeholder proof generation for MVP/demo.
- * Wire in real proving once circuits are compiled with `nargo compile`.
- */
+export interface ProveProgress {
+    stage: ProveStage;
+    pct: number;
+}
+
+/** Maps the camelCase input object to the circuit's snake_case parameter map. */
+function toCircuitInputs(i: OrderProofInputs): Record<string, string | string[]> {
+    if (i.balanceMerklePath.length !== 20) {
+        throw new Error(`balanceMerklePath must have 20 elements, got ${i.balanceMerklePath.length}`);
+    }
+    return {
+        price: i.price,
+        amount: i.amount,
+        side: i.side,
+        salt: i.salt,
+        sender_secret: i.senderSecret,
+        base_token: i.baseToken,
+        quote_token: i.quoteToken,
+        balance: i.balance,
+        balance_leaf_nonce: i.balanceLeafNonce,
+        balance_leaf_index: i.balanceLeafIndex,
+        balance_merkle_path: i.balanceMerklePath,
+        commitment: i.commitment,
+        nullifier: i.nullifier,
+        balance_root: i.balanceRoot,
+        owner_id: i.ownerId,
+        chain_id: i.chainId,
+        market_id: i.marketId,
+        expiry_block: i.expiryBlock,
+    };
+}
+
 export class ClientProver {
-  private status: ProverStatus = "idle";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private noir: any = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private backend: any = null;
+    private status: ProverStatus = "idle";
+    private worker: Worker | null = null;
+    private nextId = 1;
+    /** Reject callbacks for proofs still in flight, so destroy() can settle them. */
+    private pending = new Map<number, (reason: Error) => void>();
 
-  /**
-   * Initialize the prover by loading circuit artifacts and WASM backend.
-   *
-   * Production code (uncomment when circuit artifacts are available):
-   *
-   *   import { Noir } from '@noir-lang/noir_js';
-   *   import { UltraHonkBackend } from '@aztec/bb.js';
-   *
-   *   const circuit = await fetch('/circuits/darkbook_circuits.json').then(r => r.json());
-   *   this.backend = new UltraHonkBackend(circuit.bytecode);
-   *   this.noir = new Noir(circuit);
-   */
-  async initialize(): Promise<void> {
-    this.status = "loading";
-
-    try {
-      // -----------------------------------------------------------
-      // Production implementation:
-      //
-      // const { Noir } = await import('@noir-lang/noir_js');
-      // const { UltraHonkBackend } = await import('@aztec/bb.js');
-      //
-      // const circuit = await fetch('/circuits/darkbook_circuits.json')
-      //   .then(r => r.json());
-      //
-      // this.backend = new UltraHonkBackend(circuit.bytecode);
-      // this.noir = new Noir(circuit);
-      // -----------------------------------------------------------
-
-      // Simulate WASM initialization delay
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      this.status = "ready";
-      console.log("[ClientProver] Initialized successfully");
-    } catch (error) {
-      this.status = "error";
-      console.error("[ClientProver] Initialization failed:", error);
-      throw error;
-    }
-  }
-
-  /**
-   * Generate an order commitment proof.
-   *
-   * Production flow:
-   *   1. Execute the circuit with inputs to produce a witness
-   *   2. Pass the witness to Barretenberg to generate the proof
-   *   3. Return proof bytes + public inputs
-   */
-  async generateOrderProof(inputs: OrderProofInputs): Promise<GeneratedProof> {
-    if (this.status !== "ready") {
-      throw new Error(`Prover not ready. Current status: ${this.status}`);
+    /** Spawn the worker. Cheap -- the worker lazy-loads the circuit on first prove. */
+    async initialize(): Promise<void> {
+        if (this.worker) {
+            this.status = "ready";
+            return;
+        }
+        this.status = "loading";
+        try {
+            this.worker = new Worker(new URL("./proverWorker.ts", import.meta.url), {
+                type: "module",
+            });
+            this.status = "ready";
+        } catch (err) {
+            this.status = "error";
+            throw err;
+        }
     }
 
-    this.status = "proving";
+    /**
+     * Generate an order-commitment proof. `onProgress` fires with real
+     * milestones streamed from the worker (loading -> executing -> proving).
+     */
+    async generateOrderProof(
+        inputs: OrderProofInputs,
+        onProgress?: (p: ProveProgress) => void,
+    ): Promise<GeneratedProof> {
+        if (!this.worker) await this.initialize();
+        if (!this.worker) throw new Error("prover worker unavailable");
 
-    try {
-      console.log("[ClientProver] Generating order commitment proof...");
-      const startTime = performance.now();
+        const worker = this.worker;
+        const id = this.nextId++;
+        const circuitInputs = toCircuitInputs(inputs);
+        this.status = "proving";
 
-      // -----------------------------------------------------------
-      // Production implementation:
-      //
-      // // 1. Execute circuit to get witness
-      // const { witness } = await this.noir.execute({
-      //   price: inputs.price,
-      //   amount: inputs.amount,
-      //   side: inputs.side,
-      //   balance: inputs.balance,
-      //   salt: inputs.salt,
-      //   sender_secret: inputs.senderSecret,
-      //   balance_leaf_index: inputs.balanceLeafIndex,
-      //   balance_merkle_path: inputs.balanceMerklePath,
-      //   commitment: inputs.commitment,
-      //   balance_root: inputs.balanceRoot,
-      //   nullifier: inputs.nullifier,
-      //   token_pair_id: inputs.tokenPairId,
-      // });
-      //
-      // // 2. Generate proof from witness
-      // const proof = await this.backend.generateProof(witness);
-      //
-      // return {
-      //   proof: proof.proof,
-      //   publicInputs: proof.publicInputs,
-      // };
-      // -----------------------------------------------------------
+        return new Promise<GeneratedProof>((resolve, reject) => {
+            this.pending.set(id, reject);
+            const onMessage = (e: MessageEvent<WorkerOutbound>) => {
+                const msg = e.data;
+                if (msg.id !== id) return; // not our request
+                if (msg.type === "progress") {
+                    onProgress?.({ stage: msg.stage, pct: msg.pct });
+                } else if (msg.type === "result") {
+                    cleanup();
+                    this.status = "ready";
+                    resolve({ proof: msg.proof, publicInputs: msg.publicInputs });
+                } else if (msg.type === "error") {
+                    cleanup();
+                    this.status = "ready";
+                    reject(new Error(msg.message));
+                }
+            };
+            const onError = (e: ErrorEvent) => {
+                cleanup();
+                this.status = "error";
+                reject(new Error(`prover worker crashed: ${e.message}`));
+            };
+            const cleanup = () => {
+                this.pending.delete(id);
+                worker.removeEventListener("message", onMessage as EventListener);
+                worker.removeEventListener("error", onError);
+            };
+            worker.addEventListener("message", onMessage as EventListener);
+            worker.addEventListener("error", onError);
 
-      // Simulate proof generation time (2-5 seconds in browser WASM)
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // Placeholder proof for MVP demo
-      const proof = new Uint8Array(64).fill(0xab);
-      const publicInputs = [
-        inputs.commitment,
-        inputs.balanceRoot,
-        inputs.nullifier,
-        inputs.tokenPairId,
-      ];
-
-      const elapsed = performance.now() - startTime;
-      console.log(`[ClientProver] Proof generated in ${elapsed.toFixed(0)}ms`);
-
-      this.status = "ready";
-      return { proof, publicInputs };
-    } catch (error) {
-      this.status = "ready"; // recover to ready state
-      console.error("[ClientProver] Proof generation failed:", error);
-      throw error;
+            const req: ProveRequest = { type: "prove", id, inputs: circuitInputs };
+            worker.postMessage(req);
+        });
     }
-  }
 
-  /**
-   * Verify a proof client-side (useful for debugging).
-   *
-   * Production:
-   *   const isValid = await this.backend.verifyProof(proof);
-   */
-  async verifyProof(proof: GeneratedProof): Promise<boolean> {
-    // Production:
-    // return await this.backend.verifyProof({ proof: proof.proof, publicInputs: proof.publicInputs });
-    void proof;
-    return true;
-  }
+    getStatus(): ProverStatus {
+        return this.status;
+    }
 
-  /**
-   * Get the current prover status
-   */
-  getStatus(): ProverStatus {
-    return this.status;
-  }
-
-  /**
-   * Destroy the prover and free WASM resources
-   */
-  async destroy(): Promise<void> {
-    // Production:
-    // await this.backend?.destroy();
-    this.noir = null;
-    this.backend = null;
-    this.status = "idle";
-  }
+    async destroy(): Promise<void> {
+        // Settle any in-flight proofs before tearing down the worker, so
+        // their promises don't hang forever.
+        for (const reject of this.pending.values()) {
+            reject(new Error("prover destroyed while a proof was in flight"));
+        }
+        this.pending.clear();
+        this.worker?.terminate();
+        this.worker = null;
+        this.status = "idle";
+    }
 }
 
-// Singleton instance
+// Singleton -- the worker (and its cached circuit/backend) is reused.
 let proverInstance: ClientProver | null = null;
 
 export function getProver(): ClientProver {
-  if (!proverInstance) {
-    proverInstance = new ClientProver();
-  }
-  return proverInstance;
+    if (!proverInstance) {
+        proverInstance = new ClientProver();
+    }
+    return proverInstance;
 }

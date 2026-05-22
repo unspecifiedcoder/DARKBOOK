@@ -358,10 +358,15 @@ export class ProverService {
     ): ProofBundle {
         const started = Date.now();
 
-        // Each proof gets a fresh tmpdir so concurrent matches don't stomp on
-        // each other's witness files. We write Prover.toml into the circuit's
-        // package directory (since nargo resolves it relative to the package)
-        // by way of `--package` and `--prover-name`.
+        // Each proof gets a fresh tmpdir for its Prover.toml and the bb
+        // prove output.
+        //
+        // CONCURRENCY CAVEAT: `nargo execute` writes the witness to the
+        // SHARED path circuits/target/<pkg>.gz -- not the tmpdir. Two
+        // concurrent proofs of the *same* circuit would race on that file
+        // (one's `bb prove` could read the other's witness). The matcher
+        // proves sequentially today so this is not hit; if proving is ever
+        // parallelised, pass a per-call witness path here.
         const tmp = mkdtempSync(join(tmpdir(), `darkbook-prove-${pkgShortDir}-`));
         const proverPath = join(tmp, "Prover.toml");
         writeFileSync(proverPath, proverToml);

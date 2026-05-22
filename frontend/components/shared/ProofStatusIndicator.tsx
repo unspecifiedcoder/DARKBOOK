@@ -9,9 +9,23 @@ import type { ProofStatus } from "@/lib/stores/orderStore";
 
 interface ProofStatusIndicatorProps {
   status: ProofStatus;
+  /**
+   * Live proving milestones streamed from the worker. When present and
+   * `status === "generating"`, the label shows the real stage + percent
+   * ("Proving 55%") instead of a generic "Generating".
+   */
+  progress?: { stage: string; pct: number } | null;
   /** Optional extra class names */
   className?: string;
 }
+
+// Worker stage -> human label.
+const STAGE_LABEL: Record<string, string> = {
+  loading: "Loading circuit",
+  executing: "Computing witness",
+  proving: "Proving",
+  done: "Proof ready",
+};
 
 const STATUS_CONFIG: Record<
   ProofStatus,
@@ -55,8 +69,14 @@ const STATUS_CONFIG: Record<
   },
 };
 
-export function ProofStatusIndicator({ status, className }: ProofStatusIndicatorProps) {
+export function ProofStatusIndicator({ status, progress, className }: ProofStatusIndicatorProps) {
   const config = STATUS_CONFIG[status];
+
+  // While generating, prefer the live worker milestone over the static label.
+  const label =
+    status === "generating" && progress
+      ? `${STAGE_LABEL[progress.stage] ?? "Generating"} ${progress.pct}%`
+      : config.label;
 
   return (
     <span
@@ -65,7 +85,7 @@ export function ProofStatusIndicator({ status, className }: ProofStatusIndicator
         config.bg || "bg-muted/30",
         className
       )}
-      title={config.label}
+      title={label}
     >
       {/* Dot */}
       <span className="relative flex h-2 w-2">
@@ -92,7 +112,7 @@ export function ProofStatusIndicator({ status, className }: ProofStatusIndicator
           status === "idle" && "text-muted-foreground"
         )}
       >
-        {config.label}
+        {label}
       </span>
     </span>
   );

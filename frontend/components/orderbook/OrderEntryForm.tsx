@@ -5,8 +5,11 @@
 // ============================================================
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { cn, formatNumber } from "@/lib/utils";
-import { ClientProver, getProver, type OrderProofInputs } from "@/lib/noir/prover";
+import { type ClientProver, getProver, type OrderProofInputs } from "@/lib/noir/prover";
+import { ENGINE_ABI } from "@/lib/contracts/abis";
+import { getContractAddresses } from "@/lib/contracts/addresses";
 import {
   useOrderStore,
   type OrderSide,
@@ -32,6 +35,16 @@ function generateId(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Pair mapping
+// ---------------------------------------------------------------------------
+
+const PAIR_TO_ID: Record<string, number> = {
+  "ETH-USDC": 1,
+  "WBTC-USDC": 2,
+  "MON-USDC": 3,
+};
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -40,15 +53,26 @@ interface OrderEntryFormProps {
 }
 
 export function OrderEntryForm({ pair }: OrderEntryFormProps) {
+  const { address, chainId } = useAccount();
+
   // --- Local form state ---
   const [side, setSide] = useState<OrderSide>("buy");
   const [price, setPrice] = useState("");
   const [amount, setAmount] = useState("");
   const [proofStatus, setProofStatus] = useState<ProofStatus>("idle");
+  const [proveProgress, setProveProgress] = useState<{ stage: string; pct: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // --- Store ---
-  const { addLocalOrder, updateLocalOrder, activePairId } = useOrderStore();
+  const { addLocalOrder, updateLocalOrder, setActivePairId, activePairId } = useOrderStore();
+
+  // Map URL pair to numeric ID
+  useEffect(() => {
+    if (pair) {
+      const id = PAIR_TO_ID[pair] ?? 1;
+      setActivePairId(id);
+    }
+  }, [pair, setActivePairId]);
 
   // --- Prover singleton (ref so it survives re-renders) ---
   const proverRef = useRef<ClientProver | null>(null);
@@ -61,11 +85,45 @@ export function OrderEntryForm({ pair }: OrderEntryFormProps) {
     });
   }, []);
 
+  // --- On-chain submission ---
+  const {
+    writeContract,
+    data: txHash,
+    isPending: isTxPending,
+  } = useWriteContract();
+
+  const { isSuccess: isTxConfirmed } = useWaitForTransactionReceipt({ hash: txHash });
+
+  const addresses = chainId ? getContractAddresses(chainId) : null;
+
   // --- Derived values ---
   const priceNum = parseFloat(price) || 0;
   const amountNum = parseFloat(amount) || 0;
   const estimatedTotal = priceNum * amountNum;
   const isFormValid = priceNum > 0 && amountNum > 0;
+
+  // Track the current order being submitted
+  const currentOrderIdRef = useRef<string | null>(null);
+
+  // Update order when tx confirms
+  useEffect(() => {
+    if (isTxConfirmed && currentOrderIdRef.current) {
+      updateLocalOrder(currentOrderIdRef.current, {
+        proofStatus: "verified",
+        status: "active",
+        txHash: txHash,
+      });
+      setProofStatus("verified");
+      currentOrderIdRef.current = null;
+
+      // Reset form
+      setTimeout(() => {
+        setPrice("");
+        setAmount("");
+        setProofStatus("idle");
+      }, 2000);
+    }
+  }, [isTxConfirmed, txHash, updateLocalOrder]);
 
   // --- Submit handler ---
   const handleSubmit = useCallback(async () => {
@@ -73,9 +131,8 @@ export function OrderEntryForm({ pair }: OrderEntryFormProps) {
 
     const orderId = generateId();
     const salt = generateSalt();
-    // Placeholder commitment / nullifier — real values come from the circuit
-    const commitment = `0x${salt.slice(0, 64)}`;
-    const nullifier = `0x${salt.slice(32, 96).padEnd(64, "0")}`;
+    const commitment = `0x${salt.slice(0, 64)}` as `0x${string}`;
+    const nullifier = `0x${generateSalt().slice(0, 64)}` as `0x${string}`;
 
     const localOrder: LocalOrder = {
       id: orderId,
@@ -94,63 +151,126 @@ export function OrderEntryForm({ pair }: OrderEntryFormProps) {
     addLocalOrder(localOrder);
     setProofStatus("generating");
     setError(null);
+    currentOrderIdRef.current = orderId;
 
     try {
       // --- 1. Generate ZK proof ---
       const prover = proverRef.current;
       if (!prover) throw new Error("Prover not initialized");
 
+      // NOTE: the public values below (commitment, nullifier, ownerId,
+      // balanceRoot) must equal what the circuit re-derives from the
+      // private witness, or `noir.execute` fails inside the circuit. The
+      // browser-side Pedersen derivation that produces genuinely valid
+      // values is the remaining gap (see README roadmap). Until it lands,
+      // proving against these placeholders surfaces an honest failure
+      // rather than a fake success.
+      const ownerId = "0x00";
+      const expiryBlock = 100_000n;
       const inputs: OrderProofInputs = {
         price,
         amount,
         side: side === "buy" ? "0" : "1",
-        balance: "1000000000000000000000", // placeholder
-        salt,
-        senderSecret: salt.slice(0, 32),
+        salt: `0x${salt}`,
+        senderSecret: `0x${generateSalt()}`,
+        baseToken: "1",
+        quoteToken: "2",
+        balance: "1000000000000000000000",
+        balanceLeafNonce: "1",
         balanceLeafIndex: "0",
-        balanceMerklePath: Array(16).fill("0x00"),
+        balanceMerklePath: Array(20).fill("0"),
         commitment,
-        balanceRoot: "0x00",
         nullifier,
-        tokenPairId: activePairId.toString(),
+        balanceRoot: "0x00",
+        ownerId,
+        chainId: String(chainId ?? 31337),
+        marketId: String(activePairId),
+        expiryBlock: String(expiryBlock),
       };
 
-      await prover.generateOrderProof(inputs);
+      const { proof } = await prover.generateOrderProof(inputs, (p) => {
+        setProveProgress({ stage: p.stage, pct: p.pct });
+      });
+      // The real UltraHonk proof bytes go on-chain. With placeholder
+      // witness inputs the worker's `noir.execute` rejects before we
+      // reach here, so this line is only hit once real input derivation
+      // lands -- at which point the engine receives a genuine proof.
+      // (Plain hex encode -- `Buffer` is not reliably global in the browser.)
+      const proofBytes = `0x${Array.from(proof)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")}` as `0x${string}`;
 
       updateLocalOrder(orderId, { proofStatus: "generated", status: "submitting" });
       setProofStatus("submitting");
+      setProveProgress(null);
 
-      // --- 2. Submit on-chain (simulated) ---
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      // --- 2. Submit on-chain ---
+      if (addresses) {
+        writeContract(
+          {
+            address: addresses.engine as `0x${string}`,
+            abi: ENGINE_ABI,
+            functionName: "submitOrder",
+            args: [
+              commitment,
+              nullifier,
+              ownerId as `0x${string}`,
+              BigInt(activePairId),
+              expiryBlock,
+              proofBytes,
+            ],
+          },
+          {
+            onError: (err) => {
+              const message = err instanceof Error ? err.message : "Transaction failed";
+              updateLocalOrder(orderId, { proofStatus: "failed", status: "failed", error: message });
+              setProofStatus("failed");
+              setError(message);
+              currentOrderIdRef.current = null;
+            },
+          }
+        );
+      } else {
+        // No contract addresses — simulated submission for demo
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        updateLocalOrder(orderId, {
+          proofStatus: "verified",
+          status: "active",
+          txHash: `0x${Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join("")}`,
+        });
+        setProofStatus("verified");
+        currentOrderIdRef.current = null;
 
-      updateLocalOrder(orderId, {
-        proofStatus: "verified",
-        status: "active",
-        txHash: `0x${Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join("")}`,
-      });
-      setProofStatus("verified");
-
-      // Reset form after success
-      setTimeout(() => {
-        setPrice("");
-        setAmount("");
-        setProofStatus("idle");
-      }, 2000);
+        setTimeout(() => {
+          setPrice("");
+          setAmount("");
+          setProofStatus("idle");
+        }, 2000);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       updateLocalOrder(orderId, { proofStatus: "failed", status: "failed", error: message });
       setProofStatus("failed");
+      setProveProgress(null);
       setError(message);
+      currentOrderIdRef.current = null;
     }
-  }, [isFormValid, price, amount, side, activePairId, addLocalOrder, updateLocalOrder]);
+  }, [isFormValid, price, amount, side, chainId, activePairId, addresses, addLocalOrder, updateLocalOrder, writeContract]);
 
   // --- Render ---
   return (
     <div className="rounded-xl border border-border/50 bg-card/30 backdrop-blur-md p-4 flex flex-col gap-4">
       {/* Header */}
-      <h3 className="text-sm font-semibold text-muted-foreground tracking-wide uppercase">
-        Place Order
-      </h3>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-muted-foreground tracking-wide uppercase">
+          Place Order
+        </h3>
+        {!address && (
+          <span className="text-[10px] text-muted-foreground/60">
+            Connect wallet to trade
+          </span>
+        )}
+      </div>
 
       {/* Buy / Sell Toggle */}
       <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted/30 p-1">
@@ -220,18 +340,18 @@ export function OrderEntryForm({ pair }: OrderEntryFormProps) {
       <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
         <span>Est. Total</span>
         <span className="font-mono">
-          {estimatedTotal > 0 ? formatNumber(estimatedTotal, 4) : "—"}
+          {estimatedTotal > 0 ? formatNumber(estimatedTotal, 4) : "\u2014"}
         </span>
       </div>
 
       {/* Proof Status */}
       {proofStatus !== "idle" && (
         <div className="flex items-center gap-2 px-1">
-          <ProofStatusIndicator status={proofStatus} />
+          <ProofStatusIndicator status={proofStatus} progress={proveProgress} />
           <span className="text-xs text-muted-foreground capitalize">
             {proofStatus === "generating" && "Generating ZK proof..."}
             {proofStatus === "generated" && "Proof generated"}
-            {proofStatus === "submitting" && "Submitting on-chain..."}
+            {proofStatus === "submitting" && (isTxPending ? "Waiting for wallet..." : "Submitting on-chain...")}
             {proofStatus === "verified" && "Order confirmed"}
             {proofStatus === "failed" && "Proof failed"}
           </span>
