@@ -248,6 +248,95 @@ fn path_for(index: u32, tree: [Field; 15]) -> [Field; TREE_DEPTH] {
     p
 }
 
+// Fixture printer for `circuits/scripts/gen-fixtures.sh`. The witness is
+// chosen to be *coherent with the match_proof fixture*: same commitment_a,
+// commitment_b, fill_amount, settlement_price, match_nonce -- so the
+// fill_receipt this proof binds is identical to the one the match proof
+// binds, and the engine's settleMatch accepts both for the same match.
+//
+// Match-fixture values (see circuits/match_proof Prover.toml):
+//   commitment_a = 0x153657ffb2ddce11ef88f4d7500e6961bdb6afe935b54062fb94175cfa82dc73
+//   commitment_b = 0x204aa3af7ab7b8d868f8db24bb0454458a5197f6036e6c0dac03ec36f0fcd5f2
+//   fill = 30, settlement_price = 100, match_nonce = 999, side_a = 0 (buy)
+//
+// Paths use the bottom-8-leaf subtree with leaves at 0/2/4/6; only the
+// first three elements are non-zero (the rest is the all-zero extension).
+#[test]
+fn print_fixture_values() {
+    let base_token: Field = 11;
+    let quote_token: Field = 22;
+    let a_owner: Field = 100;
+    let b_owner: Field = 200;
+    let fill: Field = 30;
+    let price: Field = 100; // trade_value = 3000
+    let match_nonce: Field = 999;
+
+    // Buyer A needs quote >= 3000; seller B needs base >= 30.
+    let a_old_base: Field = 0;
+    let a_old_quote: Field = 10_000;
+    let b_old_base: Field = 100;
+    let b_old_quote: Field = 0;
+    let a_new_base: Field = 30;
+    let a_new_quote: Field = 7_000;
+    let b_new_base: Field = 70;
+    let b_new_quote: Field = 3_000;
+
+    let n_old: Field = 1;
+    let n_new: Field = 2;
+
+    let old_leaf_ba = hash_balance_leaf(a_owner, base_token, a_old_base, n_old);
+    let old_leaf_qa = hash_balance_leaf(a_owner, quote_token, a_old_quote, n_old);
+    let old_leaf_bb = hash_balance_leaf(b_owner, base_token, b_old_base, n_old);
+    let old_leaf_qb = hash_balance_leaf(b_owner, quote_token, b_old_quote, n_old);
+    let new_leaf_ba = hash_balance_leaf(a_owner, base_token, a_new_base, n_new);
+    let new_leaf_qa = hash_balance_leaf(a_owner, quote_token, a_new_quote, n_new);
+    let new_leaf_bb = hash_balance_leaf(b_owner, base_token, b_new_base, n_new);
+    let new_leaf_qb = hash_balance_leaf(b_owner, quote_token, b_new_quote, n_new);
+
+    let tree_old = build_tree_below_8([(0, old_leaf_ba), (2, old_leaf_qa), (4, old_leaf_bb), (6, old_leaf_qb)]);
+    let tree_mid = build_tree_below_8([(0, new_leaf_ba), (2, old_leaf_qa), (4, new_leaf_bb), (6, old_leaf_qb)]);
+    let tree_new = build_tree_below_8([(0, new_leaf_ba), (2, new_leaf_qa), (4, new_leaf_bb), (6, new_leaf_qb)]);
+
+    let old_root = extend_root(tree_old[0]);
+    let mid_root = extend_root(tree_mid[0]);
+    let new_root = extend_root(tree_new[0]);
+
+    let path_ba = path_for(0, tree_old);
+    let path_bb = path_for(4, tree_old);
+    let path_qa = path_for(2, tree_mid);
+    let path_qb = path_for(6, tree_mid);
+
+    let commitment_a: Field = 0x153657ffb2ddce11ef88f4d7500e6961bdb6afe935b54062fb94175cfa82dc73;
+    let commitment_b: Field = 0x204aa3af7ab7b8d868f8db24bb0454458a5197f6036e6c0dac03ec36f0fcd5f2;
+    let mid_id = hash_match_id(commitment_a, commitment_b, fill, price, match_nonce);
+    let receipt = hash_fill_receipt(mid_id, fill, price);
+
+    // Public inputs (5).
+    println(f"FIXTURE:old_root={old_root}");
+    println(f"FIXTURE:mid_root={mid_root}");
+    println(f"FIXTURE:new_root={new_root}");
+    println(f"FIXTURE:fill_receipt={receipt}");
+    println(f"FIXTURE:settlement_price={price}");
+    // Path non-zero elements (indices 0..3; rest are zero). Noir f-strings
+    // can't index, so bind each element to a local first.
+    let ba0 = path_ba[0]; let ba1 = path_ba[1]; let ba2 = path_ba[2];
+    let bb0 = path_bb[0]; let bb1 = path_bb[1]; let bb2 = path_bb[2];
+    let qa0 = path_qa[0]; let qa1 = path_qa[1]; let qa2 = path_qa[2];
+    let qb0 = path_qb[0]; let qb1 = path_qb[1]; let qb2 = path_qb[2];
+    println(f"FIXTURE:path_ba_0={ba0}");
+    println(f"FIXTURE:path_ba_1={ba1}");
+    println(f"FIXTURE:path_ba_2={ba2}");
+    println(f"FIXTURE:path_bb_0={bb0}");
+    println(f"FIXTURE:path_bb_1={bb1}");
+    println(f"FIXTURE:path_bb_2={bb2}");
+    println(f"FIXTURE:path_qa_0={qa0}");
+    println(f"FIXTURE:path_qa_1={qa1}");
+    println(f"FIXTURE:path_qa_2={qa2}");
+    println(f"FIXTURE:path_qb_0={qb0}");
+    println(f"FIXTURE:path_qb_1={qb1}");
+    println(f"FIXTURE:path_qb_2={qb2}");
+}
+
 #[test]
 fn test_valid_balance_update_a_is_buyer() {
     // Indices: A.base=0, A.quote=2, B.base=4, B.quote=6 (bottom 8-leaf subtree).

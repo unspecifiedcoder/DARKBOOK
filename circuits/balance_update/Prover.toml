@@ -1,34 +1,52 @@
-base_token = ""
-commitment_a = ""
-commitment_b = ""
-fill_amount = ""
-fill_receipt = ""
-leaf_index_base_a = ""
-leaf_index_base_b = ""
-leaf_index_quote_a = ""
-leaf_index_quote_b = ""
-match_nonce = ""
-mid_root = ""
-new_leaf_nonce_base_a = ""
-new_leaf_nonce_base_b = ""
-new_leaf_nonce_quote_a = ""
-new_leaf_nonce_quote_b = ""
-new_root = ""
-old_base_a = ""
-old_base_b = ""
-old_leaf_nonce_base_a = ""
-old_leaf_nonce_base_b = ""
-old_leaf_nonce_quote_a = ""
-old_leaf_nonce_quote_b = ""
-old_quote_a = ""
-old_quote_b = ""
-old_root = ""
-owner_id_a = ""
-owner_id_b = ""
-path_base_a_in_old = ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]
-path_base_b_in_old = ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]
-path_quote_a_in_mid = ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]
-path_quote_b_in_mid = ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]
-quote_token = ""
-settlement_price = ""
-side_a = ""
+# Canonical fixture witness for the balance_update circuit.
+# Synced with `print_fixture_values` in src/main.nr.
+#
+# Coherent with the match_proof fixture: same commitment_a, commitment_b,
+# fill_amount, settlement_price, match_nonce -- so fill_receipt is identical
+# and the engine's settleMatch accepts both proofs for the same match.
+#
+# Settlement: A buys 30 @ 100 (trade_value 3000). A.base 0->30, A.quote
+# 10000->7000, B.base 100->70, B.quote 0->3000. Leaves at bottom-8 subtree
+# indices 0/2/4/6; paths have non-zero elements only at indices 1 and 2.
+
+# ----- Trader A -----
+a_owner_id = "100"
+a_old_base = "0"
+a_old_quote = "10000"
+a_new_leaf_nonce_base = "2"
+a_new_leaf_nonce_quote = "2"
+a_old_leaf_nonce_base = "1"
+a_old_leaf_nonce_quote = "1"
+a_leaf_index_base = "0"
+a_leaf_index_quote = "2"
+a_path_base_in_old = ["0", "0x0ec5c4c421230d22dd2df48101d2d5bd186c545b8bff4f1cde4cc9e905cfb9ca", "0x0f9b2c0512963bcd5566da4029709e55cac07e552598a8952a80f8ffdf033e6d", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"]
+a_path_quote_in_mid = ["0", "0x04110e83a21d04e099c40969a2b57457d1dfb87d10f62fd889b8e6f2327f5263", "0x2f9efce1ca35eaf9c352b78244fe1f307ae6f373745acccd335b7a2e6064f464", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"]
+
+# ----- Trader B -----
+b_owner_id = "200"
+b_old_base = "100"
+b_old_quote = "0"
+b_new_leaf_nonce_base = "2"
+b_new_leaf_nonce_quote = "2"
+b_old_leaf_nonce_base = "1"
+b_old_leaf_nonce_quote = "1"
+b_leaf_index_base = "4"
+b_leaf_index_quote = "6"
+b_path_base_in_old = ["0", "0x28cdf25885b0d3393547485d069a8586955f79ea8622b7438738178d384bff66", "0x10a05f8315ca73aeff269207326bd78b5d4647bf4ef288f657fc621f04486349", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"]
+b_path_quote_in_mid = ["0", "0x0950b9332b6a71fdc2f4f1f0be6e4c0d980202a69e8ff86c2606822d9159aa32", "0x147b79842149c314f71a2829596bec827fc36941a82e4f82aa45643a7c90a7b0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"]
+
+# ----- Market & match context -----
+side_a = "0"
+base_token = "11"
+quote_token = "22"
+commitment_a = "0x153657ffb2ddce11ef88f4d7500e6961bdb6afe935b54062fb94175cfa82dc73"
+commitment_b = "0x204aa3af7ab7b8d868f8db24bb0454458a5197f6036e6c0dac03ec36f0fcd5f2"
+fill_amount = "30"
+match_nonce = "999"
+
+# ----- Public inputs -----
+old_root         = "0x1b053cb9bb022cd92962cae97a6d5024a85c57f605d42654b3cc32b1c6b7b3d4"
+mid_root         = "0x00e411346b24e0c2e6133750b12225b03cb4ae473b5dd697418a4a0373412eca"
+new_root         = "0x2845b0eb1d49aefe2dfb9202cb0dbb013bbaf3f095dab9e50cf6fd4ae4bcef2d"
+fill_receipt     = "0x275199da460ce433549a6fbe4029dec282c10d69c6664cf681280f421556a621"
+settlement_price = "100"

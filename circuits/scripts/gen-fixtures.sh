@@ -32,6 +32,7 @@ fi
 FIXTURES=(
     "darkbook_order_commitment order_commitment"
     "darkbook_match_proof      match_proof"
+    "darkbook_balance_update   balance_update"
 )
 
 mkdir -p "$FIXTURES_DIR"
