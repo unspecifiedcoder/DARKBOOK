@@ -1,0 +1,14 @@
+{
+  "name": "darkbook",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ZK orderbook DEX on Monad -- root scripts for the multi-package workspace",
+  "scripts": {
+    "demo": "bash scripts/demo.sh",
+    "test:circuits": "cd circuits && nargo test --workspace",
+    "test:contracts": "cd contracts && forge test --skip lint",
+    "test:matcher": "cd matcher && npx vitest run",
+    "fixtures": "bash circuits/scripts/gen-fixtures.sh",
+    "verifiers": "bash circuits/scripts/codegen-verifiers.sh"
+  }
+}
