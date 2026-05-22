@@ -47,3 +47,6 @@ contracts/test/fixtures/**/*.log
 
 # Matcher copies these from circuits/target/ via postinstall
 matcher/circuits/
+
+# Frontend copies the circuit artifact from circuits/target/ on predev/prebuild
+frontend/public/circuits/
